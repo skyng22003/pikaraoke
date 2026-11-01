@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -1010,7 +1010,7 @@ wheels = [
 
 [[package]]
 name = "pikaraoke"
-version = "1.23.0"
+version = "1.23.0+audiotracks"
 source = { editable = "." }
 dependencies = [
     { name = "babel" },
