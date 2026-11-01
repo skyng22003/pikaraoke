@@ -573,11 +573,12 @@ class Karaoke:
             self.log_and_send(_("Transposing by %s semitones: %s") % (semitones, now_playing))
 
     def set_audio_track_current(self, audio_track: int) -> bool:
-        """Restart the current song on another of its audio tracks.
+        """Switch the current song to another of its audio tracks.
 
         Karaoke files often carry an instrumental and a with-vocals track, so the
-        singer can switch to a guide vocal and back. Returns False if nothing is
-        playing or the file has no such track.
+        singer can switch to a guide vocal and back. An HLS stream carries every
+        track and the player switches mid-song; otherwise the song restarts on the
+        new track. Returns False if nothing is playing or the file has no such track.
         """
         pc = self.playback_controller
         if pc.now_playing is None:
@@ -587,7 +588,11 @@ class Karaoke:
             logging.warning(f"Cannot change audio track: no track {audio_track}")
             return False
         now_playing = pc.now_playing
-        if not self._recue_current(pc.now_playing_transpose, "audio_track", audio_track):
+        if pc.audio_track_switch_live:
+            # Players follow now_playing_audio_track from the now_playing update.
+            pc.now_playing_audio_track = audio_track
+            self.update_now_playing_socket()
+        elif not self._recue_current(pc.now_playing_transpose, "audio_track", audio_track):
             return False
         # MSG: Message shown after the audio track is changed, first is the track number and then the song name
         self.log_and_send(_("Switching to audio track %s: %s") % (audio_track + 1, now_playing))

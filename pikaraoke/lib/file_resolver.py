@@ -130,6 +130,8 @@ class FileResolver:
         output_file: Path where the transcoded output will be written.
         segment_pattern: Pattern for HLS segment filenames.
         init_filename: Filename for HLS initialization segment.
+        variant_playlist, variant_init_filename, variant_segment_pattern: The same,
+            per rendition (%v), for an HLS stream that carries every audio track.
         streaming_format: Video streaming format ('hls' or 'mp4').
         duration: Duration of the media file in seconds, rounded.
         duration_exact: Unrounded duration, used for the CDG output trim.
@@ -168,6 +170,9 @@ class FileResolver:
 
         self.segment_pattern = f"{self.tmp_dir}/{self.stream_uid}_segment_%03d.m4s"
         self.init_filename = f"{self.stream_uid}_init.mp4"
+        self.variant_playlist = f"{self.tmp_dir}/{self.stream_uid}_%v.m3u8"
+        self.variant_segment_pattern = f"{self.tmp_dir}/{self.stream_uid}_%v_segment_%03d.m4s"
+        self.variant_init_filename = f"{self.stream_uid}_%v_init.mp4"
 
     def get_current_stream_size(self) -> int:
         """Get the size of files belonging to this stream in the temporary directory.

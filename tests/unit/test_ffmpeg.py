@@ -215,6 +215,9 @@ class TestBuildFfmpegCmdVideoFile:
         fr.output_file = "/tmp/1.m3u8"
         fr.init_filename = "1_init.mp4"
         fr.segment_pattern = "/tmp/1_segment_%03d.m4s"
+        fr.variant_playlist = "/tmp/1_%v.m3u8"
+        fr.variant_init_filename = "1_%v_init.mp4"
+        fr.variant_segment_pattern = "/tmp/1_%v_segment_%03d.m4s"
         return fr
 
     def _args(self, media, **kwargs):
@@ -233,6 +236,21 @@ class TestBuildFfmpegCmdVideoFile:
         args = self._args(self._two_tracks(), audio_track=1)
         maps = [args[i + 1] for i, a in enumerate(args) if a == "-map"]
         assert maps == ["0:a:1", "0:V:0"]
+
+    def test_all_audio_tracks_become_switchable_hls_renditions(self):
+        args = self._args(self._two_tracks(), audio_track=1, all_audio_tracks=True)
+        maps = [args[i + 1] for i, a in enumerate(args) if a == "-map"]
+        assert maps == ["0:V:0", "0:a:0", "0:a:1"]
+        assert self._value(args, "-var_stream_map") == (
+            "v:0,agroup:aud,name:v a:0,agroup:aud,name:a0 a:1,agroup:aud,name:a1,default:yes"
+        )
+        assert self._value(args, "-master_pl_name") == "1.m3u8"
+        assert args[-1] == "/tmp/1_%v.m3u8"
+
+    def test_all_audio_tracks_filters_each_track(self):
+        """Every rendition must play in the singer's key, whichever they switch to."""
+        args = self._args(self._two_tracks(), semitones=2, all_audio_tracks=True)
+        assert self._value(args, "-filter_complex").count("rubberband") == 2
 
     def test_copies_8bit_h264_from_any_container(self):
         args = self._args(self._two_tracks())

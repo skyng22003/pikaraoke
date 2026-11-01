@@ -38,11 +38,10 @@ class TestControllerRoutes:
 
     @patch("pikaraoke.routes.controller.broadcast_event")
     @patch("pikaraoke.routes.controller.get_karaoke_instance")
-    def test_audio_track_switches_and_stops_the_player(
-        self, mock_get_instance, mock_broadcast, client
-    ):
+    def test_audio_track_restart_stops_the_player(self, mock_get_instance, mock_broadcast, client):
         mock_karaoke = MagicMock()
         mock_karaoke.playback_controller.now_playing_audio_tracks = ["Instrumental", "Vocals"]
+        mock_karaoke.playback_controller.audio_track_switch_live = False
         mock_karaoke.set_audio_track_current.return_value = True
         mock_get_instance.return_value = mock_karaoke
 
@@ -50,6 +49,21 @@ class TestControllerRoutes:
 
         assert json.loads(response.data) == {"success": True}
         mock_broadcast.assert_called_once_with("skip", "audio track change")
+        mock_karaoke.set_audio_track_current.assert_called_once_with(1)
+
+    @patch("pikaraoke.routes.controller.broadcast_event")
+    @patch("pikaraoke.routes.controller.get_karaoke_instance")
+    def test_live_audio_track_switch_keeps_the_player_going(
+        self, mock_get_instance, mock_broadcast, client
+    ):
+        mock_karaoke = MagicMock()
+        mock_karaoke.playback_controller.now_playing_audio_tracks = ["Instrumental", "Vocals"]
+        mock_karaoke.playback_controller.audio_track_switch_live = True
+        mock_get_instance.return_value = mock_karaoke
+
+        client.post("/api/audio_track/1")
+
+        mock_broadcast.assert_not_called()
         mock_karaoke.set_audio_track_current.assert_called_once_with(1)
 
     @patch("pikaraoke.routes.controller.broadcast_event")

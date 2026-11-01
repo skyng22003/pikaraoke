@@ -132,6 +132,7 @@ class MockPlaybackController:
     now_playing_transpose: int = 0
     now_playing_audio_track: int = 0
     now_playing_audio_tracks: list[str] = []
+    audio_track_switch_live: bool = False
     now_playing_duration: int | None = None
     now_playing_url: str | None = None
     now_playing_subtitle_url: str | None = None

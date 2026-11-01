@@ -11,6 +11,8 @@
 	// change and does not close under the user on every now_playing update.
 	var audioTracksShown = null;
 	var audioTrackPlaying = 0;
+	// Whether the stream carries every track, so a switch does not restart the song.
+	var audioTrackSwitchLive = false;
 
 	// Ensure global socket exists
 	if (typeof window.socket === 'undefined') {
@@ -73,6 +75,7 @@
 		$("#transpose").val(shownTranspose);
 		$("#semitones-label").html(getSemitonesLabel(shownTranspose));
 
+		audioTrackSwitchLive = !!np.audio_track_switch_live;
 		updateAudioTracks(np.now_playing_audio_tracks || [], np.now_playing_audio_track);
 
 		// set the volume slider to the current volume
@@ -121,7 +124,7 @@
 			var label = select.find(":selected").text();
 			// {# MSG: Confirmation before switching audio track, which restarts the song. {label} is the track name. #}
 			var message = {{ _("Switch to {label}? The song will restart from the beginning.") | tojson }};
-			if (confirm(message.replace("{label}", label))) {
+			if (audioTrackSwitchLive || confirm(message.replace("{label}", label))) {
 				$.post(window.pikaraokeConfig.basePath + "/api/audio_track/" + select.val());
 			} else {
 				select.val(audioTrackPlaying);

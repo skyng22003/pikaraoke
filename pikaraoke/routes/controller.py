@@ -54,11 +54,14 @@ def transpose(semitones):
 
 @controller_bp.route("/api/audio_track/<int:audio_track>", methods=["POST"])
 def audio_track(audio_track):
-    """Restart the current song on another of its audio tracks (e.g. with vocals)."""
+    """Switch the current song to another of its audio tracks (e.g. with vocals)."""
     k = get_karaoke_instance()
-    if not 0 <= audio_track < len(k.playback_controller.now_playing_audio_tracks):
+    pc = k.playback_controller
+    if not 0 <= audio_track < len(pc.now_playing_audio_tracks):
         return jsonify({"success": False}), 400
-    broadcast_event("skip", "audio track change")
+    # A stream without every track restarts the song, so the player stops first.
+    if not pc.audio_track_switch_live:
+        broadcast_event("skip", "audio track change")
     success = k.set_audio_track_current(audio_track)
     return jsonify({"success": success})
 

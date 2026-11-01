@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import subprocess
 from dataclasses import dataclass, field
@@ -81,6 +82,24 @@ def probe_media(file_path: str) -> MediaInfo:
     return info
 
 
+def _process_audio(audio: Any, semitones: int, normalize_audio: bool, avsync: float) -> Any:
+    """Apply sync adjustment, pitch shift and loudness normalization to an audio stream."""
+    # Audio sync adjustment: delay or trim
+    if avsync > 0:
+        audio = audio.filter("adelay", f"{avsync * 1000}|{avsync * 1000}")
+    elif avsync < 0:
+        audio = audio.filter("atrim", start=-avsync)
+
+    # Pitch shifting: 2^(semitones/12)
+    if semitones != 0:
+        audio = audio.filter("rubberband", pitch=2 ** (semitones / 12))
+
+    # Loudness normalization
+    if normalize_audio:
+        audio = audio.filter("loudnorm", i=-16, tp=-1.5, lra=11)
+    return audio
+
+
 def build_ffmpeg_cmd(
     fr: FileResolver,
     semitones: int = 0,
@@ -90,6 +109,7 @@ def build_ffmpeg_cmd(
     avsync: float = 0,
     cdg_pixel_scaling: bool = False,
     audio_track: int = 0,
+    all_audio_tracks: bool = False,
 ) -> Any:
     """Build an ffmpeg command for transcoding media.
 
@@ -104,6 +124,8 @@ def build_ffmpeg_cmd(
         avsync: Audio/video sync adjustment in seconds.
         cdg_pixel_scaling: Enable pixel scaling for CDG rendering.
         audio_track: Index of the audio stream to play, among the file's audio streams.
+        all_audio_tracks: HLS only. Write every audio stream as its own rendition, so
+            the player can switch between them without restarting the video.
 
     Returns:
         ffmpeg stream object ready to execute with run_async().
@@ -148,23 +170,12 @@ def build_ffmpeg_cmd(
         input = ffmpeg.input(fr.file_path, **{"fflags": "+genpts"})
     else:
         input = ffmpeg.input(fr.file_path)
-    # Map exactly one audio stream: mapping all of them puts every track of a
-    # multi-track MKV into the output, which the browser player cannot handle.
-    audio = input[f"a:{audio_track}"]
-
-    # Audio sync adjustment: delay or trim
-    if avsync > 0:
-        audio = audio.filter("adelay", f"{avsync * 1000}|{avsync * 1000}")
-    elif avsync < 0:
-        audio = audio.filter("atrim", start=-avsync)
-
-    # Pitch shifting: 2^(semitones/12)
-    if is_transposed:
-        audio = audio.filter("rubberband", pitch=2 ** (semitones / 12))
-
-    # Loudness normalization
-    if normalize_audio:
-        audio = audio.filter("loudnorm", i=-16, tp=-1.5, lra=11)
+    # Map audio streams individually: muxing several into one rendition puts
+    # every track of a multi-track MKV together, which the player cannot handle.
+    track_indexes = range(len(tracks)) if all_audio_tracks else [audio_track]
+    audios = [
+        _process_audio(input[f"a:{i}"], semitones, normalize_audio, avsync) for i in track_indexes
+    ]
 
     # Video source: CDG input or original video stream
     if is_cdg:
@@ -197,7 +208,7 @@ def build_ffmpeg_cmd(
             "+faststart" if buffer_fully_before_playback else "frag_keyframe+default_base_moof"
         )
         output = ffmpeg.output(
-            audio,
+            audios[0],
             video,
             fr.output_file,
             vcodec=vcodec,
@@ -214,10 +225,32 @@ def build_ffmpeg_cmd(
         # Both MP4 and HLS streaming modes use this - difference is in serving:
         # - mp4: Stream concatenates init + segments for progressive playback
         # - hls: Browser requests segments via .m3u8 playlist
+        if all_audio_tracks:
+            # One video rendition plus an audio rendition per track, grouped so the
+            # player can swap audio mid-song. output_file becomes the master
+            # playlist, and %v names each rendition's files (v, a0, a1, ...).
+            renditions = ["v:0,agroup:aud,name:v"] + [
+                f"a:{i},agroup:aud,name:a{i}" + (",default:yes" if i == audio_track else "")
+                for i in track_indexes
+            ]
+            streams = [video, *audios]
+            playlist = fr.variant_playlist
+            layout = {
+                "master_pl_name": os.path.basename(fr.output_file),
+                "var_stream_map": " ".join(renditions),
+                "hls_fmp4_init_filename": fr.variant_init_filename,
+                "hls_segment_filename": fr.variant_segment_pattern,
+            }
+        else:
+            streams = [audios[0], video]
+            playlist = fr.output_file
+            layout = {
+                "hls_fmp4_init_filename": fr.init_filename,
+                "hls_segment_filename": fr.segment_pattern,
+            }
         output = ffmpeg.output(
-            audio,
-            video,
-            fr.output_file,
+            *streams,
+            playlist,
             vcodec=vcodec,
             acodec="aac",
             audio_bitrate="192k",
@@ -229,9 +262,8 @@ def build_ffmpeg_cmd(
             hls_list_size=0,
             hls_playlist_type="event",
             hls_segment_type="fmp4",
-            hls_fmp4_init_filename=fr.init_filename,
-            hls_segment_filename=fr.segment_pattern,
             video_bitrate=vbitrate,
+            **layout,
             **video_opts,
             **{
                 "fps_mode": "cfr",

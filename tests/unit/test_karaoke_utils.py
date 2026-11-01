@@ -501,6 +501,19 @@ class TestSetAudioTrackCurrent:
         assert k.queue_manager.queue[0]["semitones"] == 3
         assert k.playback_controller.skipped_reasons == ["audio_track"]
 
+    def test_live_switch_keeps_the_song_playing(self, mock_karaoke_with_songs):
+        """A stream carrying every track switches in the player, not by restarting."""
+        k = mock_karaoke_with_songs
+        self._start_playing(k)
+        k.playback_controller.audio_track_switch_live = True
+        queued = list(k.queue_manager.queue)
+
+        assert k.set_audio_track_current(1) is True
+
+        assert k.playback_controller.now_playing_audio_track == 1
+        assert k.playback_controller.skipped_reasons == []
+        assert k.queue_manager.queue == queued
+
     def test_rejects_a_track_the_file_does_not_have(self, mock_karaoke_with_songs):
         k = mock_karaoke_with_songs
         self._start_playing(k)

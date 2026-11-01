@@ -436,6 +436,33 @@ describe("handleNowPlayingUpdate", () => {
     expect(state().octopusInstance).toBe(null);
   });
 
+  it("switches the hls audio track in place when the server changes it", () => {
+    const update = { ...base, now_playing_url: "http://stream/one.m3u8", playback_id: "PB1" };
+    splash.handleNowPlayingUpdate(update);
+    const hls = window.__hlsInstances.at(-1);
+    hls.audioTracks = [{}, {}];
+
+    splash.handleNowPlayingUpdate({ ...update, now_playing_audio_track: 1 });
+
+    expect(hls.audioTrack).toBe(1);
+    expect(window.__hlsInstances.at(-1)).toBe(hls);
+  });
+
+  it("applies a track chosen earlier once a reloaded stream's tracks load", () => {
+    splash.handleNowPlayingUpdate({
+      ...base,
+      now_playing_url: "http://stream/two.m3u8",
+      now_playing_audio_track: 1,
+      playback_id: "PB2",
+    });
+    const hls = window.__hlsInstances.at(-1);
+    hls.audioTracks = [{}, {}];
+
+    hls.handlers[window.Hls.Events.AUDIO_TRACKS_UPDATED]();
+
+    expect(hls.audioTrack).toBe(1);
+  });
+
   it("applies the volume carried by the update", () => {
     splash.handleNowPlayingUpdate({
       ...base,

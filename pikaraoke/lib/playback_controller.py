@@ -45,6 +45,8 @@ class PlaybackController:
         now_playing_transpose: Semitones to transpose current song.
         now_playing_audio_track: Index of the audio track being played.
         now_playing_audio_tracks: Names of the current song's audio tracks.
+        audio_track_switch_live: Whether the stream carries every audio track, so
+            a switch happens in the player rather than by restarting the song.
         now_playing_duration: Duration of current song in seconds.
         now_playing_url: Stream URL for current song.
         now_playing_subtitle_url: URL path for subtitles.
@@ -61,6 +63,7 @@ class PlaybackController:
     now_playing_transpose: int = 0
     now_playing_audio_track: int = 0
     now_playing_audio_tracks: list[str] = []
+    audio_track_switch_live: bool = False
     now_playing_duration: int | None = None
     now_playing_url: str | None = None
     now_playing_subtitle_url: str | None = None
@@ -144,6 +147,7 @@ class PlaybackController:
         self.now_playing_transpose = semitones
         self.now_playing_audio_track = result.audio_track
         self.now_playing_audio_tracks = result.audio_tracks
+        self.audio_track_switch_live = result.audio_track_switch_live
         self.now_playing_duration = result.duration
         self.now_playing_url = result.stream_url
         self.now_playing_subtitle_url = result.subtitle_url
@@ -372,6 +376,7 @@ class PlaybackController:
             "now_playing_transpose": self.now_playing_transpose,
             "now_playing_audio_track": self.now_playing_audio_track,
             "now_playing_audio_tracks": self.now_playing_audio_tracks,
+            "audio_track_switch_live": self.audio_track_switch_live,
             "now_playing_url": self.now_playing_url,
             "now_playing_subtitle_url": self.now_playing_subtitle_url,
             "now_playing_position": self.now_playing_position,
@@ -392,6 +397,7 @@ class PlaybackController:
         self.now_playing_transpose = 0
         self.now_playing_audio_track = 0
         self.now_playing_audio_tracks = []
+        self.audio_track_switch_live = False
         self.now_playing_duration = None
         self.now_playing_position = None
         self._deadline = None
