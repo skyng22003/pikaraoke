@@ -130,6 +130,9 @@ class MockPlaybackController:
     now_playing_filename: str | None = None
     now_playing_user: str | None = None
     now_playing_transpose: int = 0
+    now_playing_audio_track: int = 0
+    now_playing_audio_tracks: list[str] = []
+    audio_track_switch_live: bool = False
     now_playing_duration: int | None = None
     now_playing_url: str | None = None
     now_playing_subtitle_url: str | None = None
@@ -313,6 +316,7 @@ class MockKaraoke:
     reset_now_playing = Karaoke.reset_now_playing
     _recue_current = Karaoke._recue_current
     transpose_current = Karaoke.transpose_current
+    set_audio_track_current = Karaoke.set_audio_track_current
     send_notification = Karaoke.send_notification
     log_and_send = Karaoke.log_and_send
     update_now_playing_socket = Karaoke.update_now_playing_socket

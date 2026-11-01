@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import subprocess
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import ffmpeg
@@ -15,20 +17,87 @@ if TYPE_CHECKING:
     from pikaraoke.lib.file_resolver import FileResolver
 
 
-def get_media_duration(file_path: str) -> float | None:
-    """Get the duration of a media file in seconds.
+# Codecs every supported browser decodes, so they can be copied without re-encoding.
+# 10-bit H.264 (High 10) is the common miss in MKV releases: browsers cannot play it.
+_BROWSER_VIDEO = {("h264", "yuv420p"), ("h264", "yuvj420p")}
+_BROWSER_AUDIO = {"aac", "mp3"}
 
-    Args:
-        file_path: Path to the media file.
 
-    Returns:
-        Duration in seconds, or None if unable to determine.
+@dataclass
+class AudioTrack:
+    """One audio stream of a media file, as offered to the singer.
+
+    Attributes:
+        name: The stream's title or language tag, empty when it has neither.
+        codec: Codec name, used to decide whether the stream can be copied.
+    """
+
+    name: str
+    codec: str | None
+
+
+@dataclass
+class MediaInfo:
+    """What playback needs to know about a media file before transcoding it."""
+
+    duration: float | None = None
+    video_codec: str | None = None
+    video_pix_fmt: str | None = None
+    audio_tracks: list[AudioTrack] = field(default_factory=list)
+
+    @property
+    def is_browser_video(self) -> bool:
+        return (self.video_codec, self.video_pix_fmt) in _BROWSER_VIDEO
+
+
+def probe_media(file_path: str) -> MediaInfo:
+    """Probe a media file's duration, video codec and audio tracks.
+
+    Karaoke MKVs often carry several audio tracks (instrumental, with vocals),
+    and cover art as an extra video stream, so streams are read individually.
+    Returns an empty MediaInfo if the file cannot be probed.
     """
     try:
-        duration = ffmpeg.probe(file_path)["format"]["duration"]
-        return float(duration)
-    except:
-        return None
+        probe = ffmpeg.probe(file_path)
+    except (ffmpeg.Error, OSError) as e:
+        logging.warning(f"Could not probe {file_path}: {e}")
+        return MediaInfo()
+
+    info = MediaInfo()
+    duration = probe.get("format", {}).get("duration")
+    info.duration = float(duration) if duration is not None else None
+    for stream in probe.get("streams", []):
+        codec_type = stream.get("codec_type")
+        if codec_type == "audio":
+            tags = stream.get("tags", {})
+            name = tags.get("title") or tags.get("language") or ""
+            info.audio_tracks.append(AudioTrack(name=name, codec=stream.get("codec_name")))
+        elif (
+            codec_type == "video"
+            and info.video_codec is None
+            and not stream.get("disposition", {}).get("attached_pic")
+        ):
+            info.video_codec = stream.get("codec_name")
+            info.video_pix_fmt = stream.get("pix_fmt")
+    return info
+
+
+def _process_audio(audio: Any, semitones: int, normalize_audio: bool, avsync: float) -> Any:
+    """Apply sync adjustment, pitch shift and loudness normalization to an audio stream."""
+    # Audio sync adjustment: delay or trim
+    if avsync > 0:
+        audio = audio.filter("adelay", f"{avsync * 1000}|{avsync * 1000}")
+    elif avsync < 0:
+        audio = audio.filter("atrim", start=-avsync)
+
+    # Pitch shifting: 2^(semitones/12)
+    if semitones != 0:
+        audio = audio.filter("rubberband", pitch=2 ** (semitones / 12))
+
+    # Loudness normalization
+    if normalize_audio:
+        audio = audio.filter("loudnorm", i=-16, tp=-1.5, lra=11)
+    return audio
 
 
 def build_ffmpeg_cmd(
@@ -39,6 +108,8 @@ def build_ffmpeg_cmd(
     buffer_fully_before_playback: bool = False,
     avsync: float = 0,
     cdg_pixel_scaling: bool = False,
+    audio_track: int = 0,
+    all_audio_tracks: bool = False,
 ) -> Any:
     """Build an ffmpeg command for transcoding media.
 
@@ -52,6 +123,9 @@ def build_ffmpeg_cmd(
         force_mp4_encoding: If True, force mp4 encoding.
         avsync: Audio/video sync adjustment in seconds.
         cdg_pixel_scaling: Enable pixel scaling for CDG rendering.
+        audio_track: Index of the audio stream to play, among the file's audio streams.
+        all_audio_tracks: HLS only. Write every audio stream as its own rendition, so
+            the player can switch between them without restarting the video.
 
     Returns:
         ffmpeg stream object ready to execute with run_async().
@@ -67,12 +141,13 @@ def build_ffmpeg_cmd(
     using_hardware_encoder = supports_hardware_h264_encoding()
     default_vcodec = "h264_v4l2m2m" if using_hardware_encoder else "libx264"
 
-    # CDG always needs encoding; MP4 can copy video stream (already H.264 compatible)
-    # WEBM uses VP8/VP9 which must be transcoded to H.264 for fMP4 containers
+    # CDG always needs encoding. Other video is copied only when it is already
+    # browser-playable 8-bit H.264, whatever its container; VP8/VP9, HEVC and
+    # 10-bit H.264 are re-encoded.
     if is_cdg:
         vcodec = "libx264"
     else:
-        vcodec = "copy" if fr.file_extension == ".mp4" else default_vcodec
+        vcodec = "copy" if fr.media.is_browser_video else default_vcodec
 
     # Optimize bitrate: CDG is simple graphics (500k), video files need more
     # Pi 3B+ struggles with 5M in real-time, 2M provides better stability
@@ -83,30 +158,24 @@ def build_ffmpeg_cmd(
     else:
         vbitrate = "5M"
 
-    # Copy audio if no processing needed, otherwise re-encode with AAC
-    # CDG always re-encodes audio for compatibility
-    acodec = "aac" if is_cdg or is_transposed or normalize_audio or avsync != 0 else "copy"
+    # Copy audio if no processing is needed and browsers can decode it (MKVs often
+    # carry AC3/DTS), otherwise re-encode with AAC. CDG always re-encodes audio.
+    tracks = fr.media.audio_tracks
+    track_codec = tracks[audio_track].codec if audio_track < len(tracks) else None
+    needs_audio_processing = is_cdg or is_transposed or normalize_audio or avsync != 0
+    acodec = "copy" if not needs_audio_processing and track_codec in _BROWSER_AUDIO else "aac"
 
     # For container formats with VFR or timestamp issues, use genpts
     if fr.file_extension in [".webm", ".avi", ".mov", ".mkv"]:
         input = ffmpeg.input(fr.file_path, **{"fflags": "+genpts"})
     else:
         input = ffmpeg.input(fr.file_path)
-    audio = input.audio
-
-    # Audio sync adjustment: delay or trim
-    if avsync > 0:
-        audio = audio.filter("adelay", f"{avsync * 1000}|{avsync * 1000}")
-    elif avsync < 0:
-        audio = audio.filter("atrim", start=-avsync)
-
-    # Pitch shifting: 2^(semitones/12)
-    if is_transposed:
-        audio = audio.filter("rubberband", pitch=2 ** (semitones / 12))
-
-    # Loudness normalization
-    if normalize_audio:
-        audio = audio.filter("loudnorm", i=-16, tp=-1.5, lra=11)
+    # Map audio streams individually: muxing several into one rendition puts
+    # every track of a multi-track MKV together, which the player cannot handle.
+    track_indexes = range(len(tracks)) if all_audio_tracks else [audio_track]
+    audios = [
+        _process_audio(input[f"a:{i}"], semitones, normalize_audio, avsync) for i in track_indexes
+    ]
 
     # Video source: CDG input or original video stream
     if is_cdg:
@@ -124,11 +193,14 @@ def build_ffmpeg_cmd(
         if cdg_pixel_scaling:
             video = video.filter("scale", -1, 720, flags="neighbor")
     else:
-        video = input.video
+        # Capital V skips attached pictures (cover art), which MKVs often carry.
+        video = input["V:0"]
 
-    cdg_opts = {"pix_fmt": "yuv420p"}
+    # Encoded video is forced to 8-bit 4:2:0, as 10-bit sources otherwise
+    # produce High 10 H.264, which browsers cannot decode.
+    video_opts = {} if vcodec == "copy" else {"pix_fmt": "yuv420p"}
     if is_cdg and fr.duration_exact:
-        cdg_opts["t"] = fr.duration_exact + avsync
+        video_opts["t"] = fr.duration_exact + avsync
 
     # Build output based on format
     if force_mp4_encoding:
@@ -136,7 +208,7 @@ def build_ffmpeg_cmd(
             "+faststart" if buffer_fully_before_playback else "frag_keyframe+default_base_moof"
         )
         output = ffmpeg.output(
-            audio,
+            audios[0],
             video,
             fr.output_file,
             vcodec=vcodec,
@@ -146,17 +218,39 @@ def build_ffmpeg_cmd(
             f="mp4",
             video_bitrate=vbitrate,
             movflags=movflags,
-            **(cdg_opts if is_cdg else {}),
+            **video_opts,
         )
     else:
         # HLS format with fMP4 segments
         # Both MP4 and HLS streaming modes use this - difference is in serving:
         # - mp4: Stream concatenates init + segments for progressive playback
         # - hls: Browser requests segments via .m3u8 playlist
+        if all_audio_tracks:
+            # One video rendition plus an audio rendition per track, grouped so the
+            # player can swap audio mid-song. output_file becomes the master
+            # playlist, and %v names each rendition's files (v, a0, a1, ...).
+            renditions = ["v:0,agroup:aud,name:v"] + [
+                f"a:{i},agroup:aud,name:a{i}" + (",default:yes" if i == audio_track else "")
+                for i in track_indexes
+            ]
+            streams = [video, *audios]
+            playlist = fr.variant_playlist
+            layout = {
+                "master_pl_name": os.path.basename(fr.output_file),
+                "var_stream_map": " ".join(renditions),
+                "hls_fmp4_init_filename": fr.variant_init_filename,
+                "hls_segment_filename": fr.variant_segment_pattern,
+            }
+        else:
+            streams = [audios[0], video]
+            playlist = fr.output_file
+            layout = {
+                "hls_fmp4_init_filename": fr.init_filename,
+                "hls_segment_filename": fr.segment_pattern,
+            }
         output = ffmpeg.output(
-            audio,
-            video,
-            fr.output_file,
+            *streams,
+            playlist,
             vcodec=vcodec,
             acodec="aac",
             audio_bitrate="192k",
@@ -168,10 +262,9 @@ def build_ffmpeg_cmd(
             hls_list_size=0,
             hls_playlist_type="event",
             hls_segment_type="fmp4",
-            hls_fmp4_init_filename=fr.init_filename,
-            hls_segment_filename=fr.segment_pattern,
             video_bitrate=vbitrate,
-            **(cdg_opts if is_cdg else {}),
+            **layout,
+            **video_opts,
             **{
                 "fps_mode": "cfr",
                 "avoid_negative_ts": "make_zero",

@@ -179,11 +179,19 @@ beforeAll(async () => {
   // inspect the instances through window.__hlsInstances.
   window.__hlsInstances = [];
   window.Hls = class HlsStub {
+    static Events = { AUDIO_TRACKS_UPDATED: "hlsAudioTracksUpdated" };
+
     constructor(config) {
       this.config = config;
       this.loadedSource = null;
       this.media = null;
+      this.audioTracks = [];
+      this.audioTrack = 0;
+      this.handlers = {};
       window.__hlsInstances.push(this);
+    }
+    on(event, handler) {
+      this.handlers[event] = handler;
     }
     loadSource(url) {
       this.loadedSource = url;

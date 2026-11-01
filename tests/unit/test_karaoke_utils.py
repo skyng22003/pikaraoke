@@ -477,6 +477,61 @@ class TestTransposeCurrent:
         assert mock_karaoke_with_songs.playback_controller.skipped_reasons == []
 
 
+class TestSetAudioTrackCurrent:
+    """Tests for set_audio_track_current, which restarts a song on another track."""
+
+    def _start_playing(self, k, path="/songs/Artist - Song One---abc123.mkv"):
+        pc = k.playback_controller
+        pc.now_playing = "Artist - Song One"
+        pc.now_playing_filename = path
+        pc.now_playing_user = "Alice"
+        pc.now_playing_transpose = 3
+        pc.now_playing_audio_tracks = ["Instrumental", "With Vocals"]
+        pc.is_playing = True
+        return path
+
+    def test_requeues_on_the_new_track_keeping_the_key(self, mock_karaoke_with_songs):
+        k = mock_karaoke_with_songs
+        path = self._start_playing(k)
+
+        assert k.set_audio_track_current(1) is True
+
+        assert k.queue_manager.queue[0]["file"] == path
+        assert k.queue_manager.queue[0]["audio_track"] == 1
+        assert k.queue_manager.queue[0]["semitones"] == 3
+        assert k.playback_controller.skipped_reasons == ["audio_track"]
+
+    def test_live_switch_keeps_the_song_playing(self, mock_karaoke_with_songs):
+        """A stream carrying every track switches in the player, not by restarting."""
+        k = mock_karaoke_with_songs
+        self._start_playing(k)
+        k.playback_controller.audio_track_switch_live = True
+        queued = list(k.queue_manager.queue)
+
+        assert k.set_audio_track_current(1) is True
+
+        assert k.playback_controller.now_playing_audio_track == 1
+        assert k.playback_controller.skipped_reasons == []
+        assert k.queue_manager.queue == queued
+
+    def test_rejects_a_track_the_file_does_not_have(self, mock_karaoke_with_songs):
+        k = mock_karaoke_with_songs
+        self._start_playing(k)
+
+        assert k.set_audio_track_current(2) is False
+        assert k.playback_controller.skipped_reasons == []
+
+    def test_transpose_keeps_the_chosen_track(self, mock_karaoke_with_songs):
+        """Changing key must not silently drop the singer back to the first track."""
+        k = mock_karaoke_with_songs
+        self._start_playing(k)
+        k.playback_controller.now_playing_audio_track = 1
+
+        k.transpose_current(2)
+
+        assert k.queue_manager.queue[0]["audio_track"] == 1
+
+
 class TestRegisterDownloadedSong:
     """Tests for the register_downloaded_song method."""
 

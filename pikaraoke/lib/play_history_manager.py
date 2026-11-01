@@ -454,9 +454,10 @@ class PlayHistoryManager:
         marks the song as sung through; "skip" and "timeout" do not. Stamping
         ended_at is what takes the row out of the "playing right now" state.
         """
-        # A transpose or re-cue restart ends the stream but not the performance:
-        # hold the row open so the restart reuses it instead of logging a second.
-        if reason in ("transpose", "restart") and self._current_play_id is not None:
+        # A transpose, audio track change or re-cue restart ends the stream but not
+        # the performance: hold the row open so the restart reuses it instead of
+        # logging a second.
+        if reason in ("transpose", "restart", "audio_track") and self._current_play_id is not None:
             self._resuming = True
             return
 

@@ -43,6 +43,10 @@ class PlaybackController:
         now_playing_filename: File path of the currently playing song.
         now_playing_user: User who queued the current song.
         now_playing_transpose: Semitones to transpose current song.
+        now_playing_audio_track: Index of the audio track being played.
+        now_playing_audio_tracks: Names of the current song's audio tracks.
+        audio_track_switch_live: Whether the stream carries every audio track, so
+            a switch happens in the player rather than by restarting the song.
         now_playing_duration: Duration of current song in seconds.
         now_playing_url: Stream URL for current song.
         now_playing_subtitle_url: URL path for subtitles.
@@ -57,6 +61,9 @@ class PlaybackController:
     now_playing_filename: str | None = None
     now_playing_user: str | None = None
     now_playing_transpose: int = 0
+    now_playing_audio_track: int = 0
+    now_playing_audio_tracks: list[str] = []
+    audio_track_switch_live: bool = False
     now_playing_duration: int | None = None
     now_playing_url: str | None = None
     now_playing_subtitle_url: str | None = None
@@ -100,7 +107,9 @@ class PlaybackController:
         """Get the current FFmpeg process."""
         return self.stream_manager.ffmpeg_process
 
-    def play_file(self, file_path: str, user: str, semitones: int = 0) -> PlaybackResult:
+    def play_file(
+        self, file_path: str, user: str, semitones: int = 0, audio_track: int = 0
+    ) -> PlaybackResult:
         """Start playback of a media file.
 
         Blocks until client connects or timeout occurs.
@@ -109,6 +118,7 @@ class PlaybackController:
             file_path: Path to the media file to play.
             user: User who queued the song.
             semitones: Number of semitones to transpose (0 = no change).
+            audio_track: Index of the audio track to play (0 = the file's first).
 
         Returns:
             PlaybackResult with success status and stream information.
@@ -125,7 +135,7 @@ class PlaybackController:
 
         self.claim(file_path)
 
-        result = self.stream_manager.play_file(file_path, semitones)
+        result = self.stream_manager.play_file(file_path, semitones, audio_track)
 
         if not result.success:
             self.now_playing_filename = None
@@ -135,6 +145,9 @@ class PlaybackController:
         self.now_playing = self.filename_from_path(file_path, remove_youtube_id=True)
         self.now_playing_user = user
         self.now_playing_transpose = semitones
+        self.now_playing_audio_track = result.audio_track
+        self.now_playing_audio_tracks = result.audio_tracks
+        self.audio_track_switch_live = result.audio_track_switch_live
         self.now_playing_duration = result.duration
         self.now_playing_url = result.stream_url
         self.now_playing_subtitle_url = result.subtitle_url
@@ -278,7 +291,7 @@ class PlaybackController:
 
         if reason:
             logging.info(f"Reason: {reason}")
-            if reason not in ("complete", "skip", "transpose", "restart"):
+            if reason not in ("complete", "skip", "transpose", "restart", "audio_track"):
                 # MSG: Message shown when the song ends abnormally
                 self.events.emit("notification", _("Song ended abnormally: %s") % reason, "danger")
 
@@ -361,6 +374,9 @@ class PlaybackController:
             "now_playing_user": self.now_playing_user,
             "now_playing_duration": self.now_playing_duration,
             "now_playing_transpose": self.now_playing_transpose,
+            "now_playing_audio_track": self.now_playing_audio_track,
+            "now_playing_audio_tracks": self.now_playing_audio_tracks,
+            "audio_track_switch_live": self.audio_track_switch_live,
             "now_playing_url": self.now_playing_url,
             "now_playing_subtitle_url": self.now_playing_subtitle_url,
             "now_playing_position": self.now_playing_position,
@@ -379,6 +395,9 @@ class PlaybackController:
         self.is_playing = False
         self.start_requested = False
         self.now_playing_transpose = 0
+        self.now_playing_audio_track = 0
+        self.now_playing_audio_tracks = []
+        self.audio_track_switch_live = False
         self.now_playing_duration = None
         self.now_playing_position = None
         self._deadline = None

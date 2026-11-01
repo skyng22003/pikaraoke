@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pikaraoke.lib.ffmpeg import AudioTrack, MediaInfo
 from pikaraoke.lib.preference_manager import PreferenceManager
 from pikaraoke.lib.stream_manager import (
     PlaybackResult,
@@ -283,6 +284,16 @@ class TestStreamManagerCheckHlsBuffer:
 
         assert result is False
 
+    def test_audio_rendition_segments_do_not_count_toward_start(self, tmp_path, test_prefs):
+        """A multi-track stream writes audio-only segments that hold no video."""
+        sm = StreamManager(test_prefs)
+        for name in ("v_segment_000", "a0_segment_000", "a1_segment_000"):
+            (tmp_path / f"{self.STREAM_UID}_{name}.m4s").write_bytes(b"x" * 50000)
+        mock_fr = self._make_mock_fr(tmp_path, "#EXTM3U\n")
+        mock_fr.get_current_stream_size.return_value = 200000
+
+        assert sm._check_hls_buffer(mock_fr, 150000) is False
+
     def test_returns_false_when_tmp_dir_not_found(self, test_prefs):
         """Test returns False when temp directory doesn't exist."""
         sm = StreamManager(test_prefs)
@@ -532,6 +543,45 @@ class TestStreamManagerPlayFile:
 
         assert result.success is True
         assert result.stream_url == "/stream/12345.m3u8"
+
+    @pytest.mark.parametrize("requested, played", [(1, 1), (5, 0)])
+    @patch("flask_babel._", side_effect=lambda x: x)
+    @patch("pikaraoke.lib.stream_manager.FileResolver")
+    def test_play_file_plays_requested_track_or_falls_back_to_first(
+        self, mock_resolver_class, mock_gettext, test_prefs, requested, played
+    ):
+        """A track index the file lacks would make ffmpeg fail to map it."""
+        sm = StreamManager(test_prefs, streaming_format="hls")
+        fr = self._setup_resolver(mock_resolver_class, output_ext="m3u8")
+        fr.media = MediaInfo(
+            audio_tracks=[AudioTrack("Instrumental", "aac"), AudioTrack("", "aac")]
+        )
+
+        with patch.object(sm, "_transcode_file", return_value=(True, False)) as mock_transcode:
+            result = sm.play_file("/songs/test.mkv", audio_track=requested)
+
+        assert mock_transcode.call_args.args[3] == played
+        assert result.audio_track == played
+        assert result.audio_tracks == ["Instrumental", ""]
+
+    @pytest.mark.parametrize("streaming_format, live", [("hls", True), ("mp4", False)])
+    @patch("flask_babel._", side_effect=lambda x: x)
+    @patch("pikaraoke.lib.stream_manager.FileResolver")
+    def test_play_file_streams_every_track_only_in_hls(
+        self, mock_resolver_class, mock_gettext, test_prefs, streaming_format, live
+    ):
+        """Progressive MP4 has no way to switch renditions, so it streams one track."""
+        sm = StreamManager(test_prefs, streaming_format=streaming_format)
+        fr = self._setup_resolver(mock_resolver_class)
+        fr.media = MediaInfo(
+            audio_tracks=[AudioTrack("Instrumental", "aac"), AudioTrack("", "aac")]
+        )
+
+        with patch.object(sm, "_transcode_file", return_value=(True, False)) as mock_transcode:
+            result = sm.play_file("/songs/test.mkv")
+
+        assert mock_transcode.call_args.args[4] is live
+        assert result.audio_track_switch_live is live
 
     @patch("flask_babel._", side_effect=lambda x: x)
     @patch("pikaraoke.lib.stream_manager.is_transcoding_required", return_value=True)

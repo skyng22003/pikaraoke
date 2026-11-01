@@ -14,6 +14,10 @@ let currentVideoUrl = null;
 let currentSubtitleUrl = null;
 let subtitleEnginePromise = null;
 let hlsInstance = null;
+// The audio track the server says is playing. A stream carrying every track of
+// the file switches in place, so it is applied on each update and again once a
+// new stream's tracks have loaded (a screen reloading mid-song after a switch).
+let wantedAudioTrack = 0;
 let idleTime = 0;
 let screensaverTimeoutSeconds = PikaraokeConfig.screensaverTimeout;
 let bg_playlist = [];
@@ -357,6 +361,19 @@ const updateSubtitles = (subtitleUrl, video) => {
     .catch((e) => console.error(e));
 };
 
+const applyAudioTrack = (video) => {
+  if (hlsInstance) {
+    if (wantedAudioTrack < hlsInstance.audioTracks.length && hlsInstance.audioTrack !== wantedAudioTrack) {
+      hlsInstance.audioTrack = wantedAudioTrack;
+    }
+  } else if (video.audioTracks && wantedAudioTrack < video.audioTracks.length) {
+    // Native HLS (desktop Safari) exposes the renditions on the element itself.
+    for (let i = 0; i < video.audioTracks.length; i++) {
+      video.audioTracks[i].enabled = i === wantedAudioTrack;
+    }
+  }
+};
+
 const handleNowPlayingUpdate = (np) => {
   nowPlaying = np;
   if (np.session_name !== sessionName) {
@@ -364,6 +381,7 @@ const handleNowPlayingUpdate = (np) => {
     renderSessionName();
   }
   currentPlaybackId = np.playback_id ?? null;
+  wantedAudioTrack = np.now_playing_audio_track ?? 0;
 
   // The server ended the song (skip, clear queue, transpose): stop rather than
   // play on from the buffer, whose stream files have already been deleted.
@@ -426,9 +444,11 @@ const handleNowPlayingUpdate = (np) => {
       if (useNativeHLS) {
         video.src = streamUrl;
         seekOnceLoaded();
+        video.addEventListener("loadedmetadata", () => applyAudioTrack(video), { once: true });
       } else {
         if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
         hlsInstance = new Hls({ startPosition: resumeAt });
+        hlsInstance.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => applyAudioTrack(video));
         hlsInstance.loadSource(streamUrl);
         hlsInstance.attachMedia(video);
       }
@@ -465,6 +485,8 @@ const handleNowPlayingUpdate = (np) => {
     // buffering during a long transcode, and a restored or stale tab could fire it
     // for the whole kiosk - so it is gone.
   }
+
+  applyAudioTrack(video);
 }
 
 async function loadNowPlaying() {

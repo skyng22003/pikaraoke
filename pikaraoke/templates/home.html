@@ -7,6 +7,13 @@
 	var pikaWaiting = false;
 	var pikaWaitingSong = null;
 
+	// The playing song's audio tracks, so the selector is rebuilt only when they
+	// change and does not close under the user on every now_playing update.
+	var audioTracksShown = null;
+	var audioTrackPlaying = 0;
+	// Whether the stream carries every track, so a switch does not restart the song.
+	var audioTrackSwitchLive = false;
+
 	// Ensure global socket exists
 	if (typeof window.socket === 'undefined') {
 		window.socket = io({ path: window.pikaraokeConfig.socketioPath });
@@ -68,6 +75,9 @@
 		$("#transpose").val(shownTranspose);
 		$("#semitones-label").html(getSemitonesLabel(shownTranspose));
 
+		audioTrackSwitchLive = !!np.audio_track_switch_live;
+		updateAudioTracks(np.now_playing_audio_tracks || [], np.now_playing_audio_track);
+
 		// set the volume slider to the current volume
 		if (np.volume != volume) {
 			volume = np.volume;
@@ -88,8 +98,38 @@
 		}
 	}
 
+	function updateAudioTracks(tracks, playing) {
+		audioTrackPlaying = playing;
+		var key = JSON.stringify(tracks);
+		if (key !== audioTracksShown) {
+			audioTracksShown = key;
+			var select = $("#audio-track").empty();
+			tracks.forEach(function (name, i) {
+				// {# MSG: Name of an audio track in the track selector, followed by its number. #}
+				var label = {{ _("Track") | tojson }} + " " + (i + 1) + (name ? ": " + name : "");
+				// .text() escapes the name, which comes from the file's own metadata.
+				select.append($("<option>").val(i).text(label));
+			});
+		}
+		$("#audio-track").val(playing);
+		// Only a file with a choice to make (e.g. instrumental and with vocals) shows it.
+		$("#audio-track-control").toggle(tracks.length > 1);
+	}
+
 	$(function () {
 		$(".control-box").hide();
+
+		$("#audio-track").on("change", function () {
+			var select = $(this);
+			var label = select.find(":selected").text();
+			// {# MSG: Confirmation before switching audio track, which restarts the song. {label} is the track name. #}
+			var message = {{ _("Switch to {label}? The song will restart from the beginning.") | tojson }};
+			if (audioTrackSwitchLive || confirm(message.replace("{label}", label))) {
+				$.post(window.pikaraokeConfig.basePath + "/api/audio_track/" + select.val());
+			} else {
+				select.val(audioTrackPlaying);
+			}
+		});
 
 		var slider = document.getElementById("transpose");
 		var output = document.getElementById("semitones-label");
@@ -309,6 +349,16 @@
 				style="margin: 0 8px 0px 5px; width: 100px"
 			/>
 			<span class="icon is-text-size"><i id="vol-up" class="ph ph-speaker-high"></i></span>
+		</div>
+	</div>
+	<div id="audio-track-control" style="display: none">
+		<hr />
+		<div class="is-flex is-justify-content-space-between is-align-items-center">
+			{# MSG: Title of a control to choose which audio track of the song plays, e.g. instrumental or with vocals. #}
+			<h4 class="mb-0">{% trans %}Audio Track{% endtrans %}</h4>
+			<div class="select is-small">
+				<select id="audio-track"></select>
+			</div>
 		</div>
 	</div>
 	<hr />

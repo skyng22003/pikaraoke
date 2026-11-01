@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from queue import Queue
 from threading import Thread
 from typing import Any
@@ -29,6 +29,10 @@ class PlaybackResult:
         stream_uid: Identifier of this playback, unique per play of a file.
         subtitle_url: URL path for subtitles (if present).
         duration: Video duration in seconds.
+        audio_tracks: Names of the file's audio tracks, in stream order.
+        audio_track: Index of the audio track being played.
+        audio_track_switch_live: Whether the stream carries every audio track, so
+            the player switches between them without restarting the song.
         error: Error message if playback failed.
     """
 
@@ -37,6 +41,9 @@ class PlaybackResult:
     stream_uid: str | None = None
     subtitle_url: str | None = None
     duration: int | None = None
+    audio_tracks: list[str] = field(default_factory=list)
+    audio_track: int = 0
+    audio_track_switch_live: bool = False
     error: str | None = None
 
 
@@ -105,7 +112,7 @@ class StreamManager:
         """Prefix relative app paths when PiKaraoke is mounted under a subpath."""
         return f"{self.base_path}{path}" if self.base_path else path
 
-    def play_file(self, file_path: str, semitones: int = 0) -> PlaybackResult:
+    def play_file(self, file_path: str, semitones: int = 0, audio_track: int = 0) -> PlaybackResult:
         """Start playback of a media file.
 
         Handles file resolution, transcoding, and stream setup.
@@ -113,6 +120,7 @@ class StreamManager:
         Args:
             file_path: Path to the media file to play.
             semitones: Number of semitones to transpose (0 = no change).
+            audio_track: Index of the audio track to play (0 = the file's first).
 
         Returns:
             PlaybackResult with success status and stream information.
@@ -133,6 +141,7 @@ class StreamManager:
             or normalize_audio
             or is_transcoding_required(file_path)
             or avsync != 0
+            or audio_track != 0
             or is_hls
         )
 
@@ -144,6 +153,12 @@ class StreamManager:
             error_message = _("Error resolving file: %s") % str(e)
             logging.error(error_message)
             return PlaybackResult(success=False, error=error_message)
+
+        if audio_track >= len(fr.media.audio_tracks):
+            # A track picked for another file, or a file that could not be probed
+            audio_track = 0
+        # HLS lets the player pick among audio renditions; progressive MP4 cannot.
+        all_audio_tracks = is_hls and len(fr.media.audio_tracks) > 1
 
         # Set stream URL based on format
         if is_hls:
@@ -159,7 +174,7 @@ class StreamManager:
             is_buffering_complete = True
         else:
             is_transcoding_complete, is_buffering_complete = self._transcode_file(
-                fr, semitones, is_hls
+                fr, semitones, is_hls, audio_track, all_audio_tracks
             )
 
         subtitle_url = None
@@ -176,6 +191,9 @@ class StreamManager:
                 stream_uid=str(fr.stream_uid),
                 subtitle_url=subtitle_url,
                 duration=fr.duration,
+                audio_tracks=[track.name for track in fr.media.audio_tracks],
+                audio_track=audio_track,
+                audio_track_switch_live=all_audio_tracks,
             )
         else:
             error_message = _("Failed to prepare stream")
@@ -202,13 +220,22 @@ class StreamManager:
         logging.debug(f"Copying file failed: {dest_path}")
         return False
 
-    def _transcode_file(self, fr: FileResolver, semitones: int, is_hls: bool) -> tuple[bool, bool]:
+    def _transcode_file(
+        self,
+        fr: FileResolver,
+        semitones: int,
+        is_hls: bool,
+        audio_track: int = 0,
+        all_audio_tracks: bool = False,
+    ) -> tuple[bool, bool]:
         """Transcode a file using FFmpeg.
 
         Args:
             fr: FileResolver instance with file information.
             semitones: Semitones to transpose.
             is_hls: Whether to use HLS streaming format.
+            audio_track: Index of the audio track to play.
+            all_audio_tracks: Write every audio track as its own HLS rendition.
 
         Returns:
             Tuple of (is_transcoding_complete, is_buffering_complete).
@@ -233,6 +260,8 @@ class StreamManager:
             complete_transcode_before_play,
             avsync,
             cdg_pixel_scaling,
+            audio_track,
+            all_audio_tracks,
         )
         self.ffmpeg_process = ffmpeg_cmd.run_async(pipe_stderr=True, pipe_stdin=True)
 
@@ -315,10 +344,16 @@ class StreamManager:
             if os.path.getsize(fr.output_file) == 0:
                 return False
 
-            # Count segment files directly (works even before playlist is written)
+            # Count segment files directly (works even before playlist is written).
+            # Audio renditions ({uid}_a0_...) are left out: their small segments
+            # would otherwise count toward a start the video is not ready for.
             stream_uid_str = str(fr.stream_uid)
             segment_files = [
-                f for f in os.listdir(fr.tmp_dir) if stream_uid_str in f and f.endswith(".m4s")
+                f
+                for f in os.listdir(fr.tmp_dir)
+                if stream_uid_str in f
+                and f.endswith(".m4s")
+                and not f.startswith(f"{stream_uid_str}_a")
             ]
             segment_count = len(segment_files)
             min_segments = 3

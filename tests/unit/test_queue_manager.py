@@ -582,6 +582,7 @@ class TestQueueManagerUpdateSongPath:
             "file": "/songs/new---abc.mp4",
             "title": "new",
             "semitones": 2,
+            "audio_track": 0,
         }
 
     def test_a_song_that_is_not_queued_changes_nothing(self, queue_manager):

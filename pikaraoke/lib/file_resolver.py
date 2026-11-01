@@ -8,7 +8,7 @@ import time
 import zipfile
 from sys import maxsize
 
-from pikaraoke.lib.ffmpeg import get_media_duration
+from pikaraoke.lib.ffmpeg import MediaInfo, probe_media
 from pikaraoke.lib.get_platform import get_platform
 from pikaraoke.lib.mcg import decode_mcg
 
@@ -130,9 +130,12 @@ class FileResolver:
         output_file: Path where the transcoded output will be written.
         segment_pattern: Pattern for HLS segment filenames.
         init_filename: Filename for HLS initialization segment.
+        variant_playlist, variant_init_filename, variant_segment_pattern: The same,
+            per rendition (%v), for an HLS stream that carries every audio track.
         streaming_format: Video streaming format ('hls' or 'mp4').
         duration: Duration of the media file in seconds, rounded.
         duration_exact: Unrounded duration, used for the CDG output trim.
+        media: Probed codecs and audio tracks of the media file.
     """
 
     file_path: str | None = None
@@ -140,6 +143,7 @@ class FileResolver:
     cdg_stream: bytes | None = None
     file_extension: str | None = None
     ass_file_path: str | None = None
+    media: MediaInfo
 
     def __init__(self, file_path: str, streaming_format: str = "hls") -> None:
         """Initialize the FileResolver with a media file path.
@@ -166,6 +170,9 @@ class FileResolver:
 
         self.segment_pattern = f"{self.tmp_dir}/{self.stream_uid}_segment_%03d.m4s"
         self.init_filename = f"{self.stream_uid}_init.mp4"
+        self.variant_playlist = f"{self.tmp_dir}/{self.stream_uid}_%v.m3u8"
+        self.variant_segment_pattern = f"{self.tmp_dir}/{self.stream_uid}_%v_segment_%03d.m4s"
+        self.variant_init_filename = f"{self.stream_uid}_%v_init.mp4"
 
     def get_current_stream_size(self) -> int:
         """Get the size of files belonging to this stream in the temporary directory.
@@ -294,7 +301,8 @@ class FileResolver:
             self.handle_aegissub_subtile(file_path)
         if not self.file_path:
             raise ValueError("File path is required to process file")
-        duration = get_media_duration(self.file_path)
+        self.media = probe_media(self.file_path)
+        duration = self.media.duration
         # duration is what the UI shows; duration_exact drives the CDG -t trim, where
         # rounding to the nearest second would clip the end of the song.
         self.duration = round(duration) if duration is not None else None

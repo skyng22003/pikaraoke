@@ -534,8 +534,10 @@ class Karaoke:
             self.events.emit("queue_update")
         return new_path
 
-    def _recue_current(self, semitones: int, reason: str) -> bool:
+    def _recue_current(self, semitones: int, reason: str, audio_track: int | None = None) -> bool:
         """Re-enqueue the playing song at the head and end its stream.
+
+        The audio track carries over unless a new one is given.
 
         The skip reason holds the play-history row open so this is not logged as
         a second play. Returns False if nothing is playing or the queue refused it.
@@ -544,7 +546,11 @@ class Karaoke:
         user = self.playback_controller.now_playing_user
         if filename is None or user is None:
             return False
-        queued, message = self.queue_manager.enqueue(filename, user, semitones, True)
+        if audio_track is None:
+            audio_track = self.playback_controller.now_playing_audio_track
+        queued, message = self.queue_manager.enqueue(
+            filename, user, semitones, True, audio_track=audio_track
+        )
         if not queued:
             # Skipping a refused requeue would strand the singer with nothing to restart.
             self.log_and_send(str(message), "danger")
@@ -565,6 +571,32 @@ class Karaoke:
         if self._recue_current(semitones, "transpose"):
             # MSG: Message shown after the song is transposed, first is the semitones and then the song name
             self.log_and_send(_("Transposing by %s semitones: %s") % (semitones, now_playing))
+
+    def set_audio_track_current(self, audio_track: int) -> bool:
+        """Switch the current song to another of its audio tracks.
+
+        Karaoke files often carry an instrumental and a with-vocals track, so the
+        singer can switch to a guide vocal and back. An HLS stream carries every
+        track and the player switches mid-song; otherwise the song restarts on the
+        new track. Returns False if nothing is playing or the file has no such track.
+        """
+        pc = self.playback_controller
+        if pc.now_playing is None:
+            logging.warning("Cannot change audio track: no song currently playing")
+            return False
+        if not 0 <= audio_track < len(pc.now_playing_audio_tracks):
+            logging.warning(f"Cannot change audio track: no track {audio_track}")
+            return False
+        now_playing = pc.now_playing
+        if pc.audio_track_switch_live:
+            # Players follow now_playing_audio_track from the now_playing update.
+            pc.now_playing_audio_track = audio_track
+            self.update_now_playing_socket()
+        elif not self._recue_current(pc.now_playing_transpose, "audio_track", audio_track):
+            return False
+        # MSG: Message shown after the audio track is changed, first is the track number and then the song name
+        self.log_and_send(_("Switching to audio track %s: %s") % (audio_track + 1, now_playing))
+        return True
 
     def volume_change(self, vol_level: float) -> bool:
         """Set the volume level.
@@ -749,7 +781,7 @@ class Karaoke:
                     if not song:
                         continue
                     result = self.playback_controller.play_file(
-                        song["file"], song["user"], song["semitones"]
+                        song["file"], song["user"], song["semitones"], song["audio_track"]
                     )
 
                     # play_file() blocks only until the client connects, so this

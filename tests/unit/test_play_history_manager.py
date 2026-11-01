@@ -442,11 +442,13 @@ class TestTranspose:
         assert len(history.get_plays()) == 1
         assert history.get_top_songs()[0]["play_count"] == 1
 
-    def test_recue_restart_does_not_log_a_second_play(self, history, events, song_id):
-        """A re-cue restart (autoplay off) holds the open play like a transpose."""
+    @pytest.mark.parametrize("reason", ["restart", "audio_track"])
+    def test_restart_does_not_log_a_second_play(self, history, events, song_id, reason):
+        """A re-cue restart (autoplay off) or audio track switch holds the open play
+        like a transpose."""
         history.record_play(song_id, None, "Alice", "A Song")
-        events.emit("song_ended", "restart")
-        history.record_play(song_id, None, "Alice", "A Song")  # restarts on manual Play
+        events.emit("song_ended", reason)
+        history.record_play(song_id, None, "Alice", "A Song")  # restarts the same song
         events.emit("song_ended", "complete")
 
         assert len(history.get_plays()) == 1
