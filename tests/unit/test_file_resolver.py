@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pikaraoke.lib.ffmpeg import MediaInfo
 from pikaraoke.lib.file_resolver import (
     FileResolver,
     create_tmp_dir,
@@ -264,7 +265,7 @@ class TestDeleteStreamFiles:
 class TestFileResolverInit:
     """Tests for FileResolver initialization."""
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_init_mp4_file(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -281,7 +282,7 @@ class TestFileResolverInit:
         assert fr.streaming_format == "hls"
         assert ".m3u8" in fr.output_file
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=200)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=200))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_init_mp4_streaming_format(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -294,7 +295,7 @@ class TestFileResolverInit:
         assert fr.streaming_format == "mp4"
         assert ".mp4" in fr.output_file
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_init_sets_segment_pattern(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -311,7 +312,7 @@ class TestFileResolverInit:
 class TestFileResolverHandleAegissubSubtitle:
     """Tests for FileResolver.handle_aegissub_subtile method."""
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_finds_ass_file(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -325,7 +326,7 @@ class TestFileResolverHandleAegissubSubtitle:
 
         assert fr.ass_file_path == str(ass_file)
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_finds_uppercase_ass_file(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -339,7 +340,7 @@ class TestFileResolverHandleAegissubSubtitle:
 
         assert fr.ass_file_path.casefold() == str(ass_file).casefold()
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_no_ass_file(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -355,7 +356,7 @@ class TestFileResolverHandleAegissubSubtitle:
 class TestFileResolverHandleMp3Cdg:
     """Tests for FileResolver.handle_mp3_cdg method."""
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_finds_cdg_file(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -370,7 +371,7 @@ class TestFileResolverHandleMp3Cdg:
         assert fr.file_path == str(mp3_file)
         assert fr.cdg_file_path == str(cdg_file)
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_finds_uppercase_cdg_file(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -385,7 +386,7 @@ class TestFileResolverHandleMp3Cdg:
         assert fr.cdg_file_path.casefold() == str(cdg_file).casefold()
 
     @patch("pikaraoke.lib.file_resolver.decode_mcg", return_value=b"cdg stream")
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_decodes_mcg_when_no_cdg(
@@ -405,7 +406,7 @@ class TestFileResolverHandleMp3Cdg:
         assert mock_decode.call_args.args[0].casefold() == str(mcg_file).casefold()
 
     @patch("pikaraoke.lib.file_resolver.decode_mcg")
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_prefers_cdg_over_mcg(
@@ -438,7 +439,7 @@ class TestFileResolverHandleMp3Cdg:
 class TestFileResolverHandleZippedCdg:
     """Tests for FileResolver.handle_zipped_cdg method."""
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     def test_extracts_valid_zip(self, mock_create, mock_duration, tmp_path):
         """Test extracting valid CDG zip into a uid-scoped directory."""
@@ -488,7 +489,7 @@ class TestFileResolverHandleZippedCdg:
 class TestFileResolverGetCurrentStreamSize:
     """Tests for FileResolver.get_current_stream_size method."""
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     def test_calculates_stream_size(self, mock_create, mock_duration, tmp_path):
         """Test calculating size of stream files."""
@@ -508,7 +509,7 @@ class TestFileResolverGetCurrentStreamSize:
 
             assert size == 3000
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     def test_returns_zero_when_no_segments(self, mock_create, mock_duration, tmp_path):
         """Test returns 0 when no stream segments exist."""
@@ -525,7 +526,7 @@ class TestFileResolverGetCurrentStreamSize:
 class TestFileResolverProcessFile:
     """Tests for FileResolver.process_file method."""
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_process_mp4(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -539,7 +540,7 @@ class TestFileResolverProcessFile:
         assert fr.file_path == str(video_file)
         assert fr.cdg_file_path is None
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_process_webm(self, mock_tmp, mock_create, mock_duration, tmp_path):
@@ -552,7 +553,7 @@ class TestFileResolverProcessFile:
         assert fr.file_extension == ".webm"
         assert fr.file_path == str(video_file)
 
-    @patch("pikaraoke.lib.file_resolver.get_media_duration", return_value=180)
+    @patch("pikaraoke.lib.file_resolver.probe_media", return_value=MediaInfo(duration=180))
     @patch("pikaraoke.lib.file_resolver.create_tmp_dir")
     @patch("pikaraoke.lib.file_resolver.get_tmp_dir", return_value="/tmp/12345")
     def test_process_mkv(self, mock_tmp, mock_create, mock_duration, tmp_path):

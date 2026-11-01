@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pikaraoke.lib.ffmpeg import AudioTrack, MediaInfo
 from pikaraoke.lib.preference_manager import PreferenceManager
 from pikaraoke.lib.stream_manager import (
     PlaybackResult,
@@ -532,6 +533,26 @@ class TestStreamManagerPlayFile:
 
         assert result.success is True
         assert result.stream_url == "/stream/12345.m3u8"
+
+    @pytest.mark.parametrize("requested, played", [(1, 1), (5, 0)])
+    @patch("flask_babel._", side_effect=lambda x: x)
+    @patch("pikaraoke.lib.stream_manager.FileResolver")
+    def test_play_file_plays_requested_track_or_falls_back_to_first(
+        self, mock_resolver_class, mock_gettext, test_prefs, requested, played
+    ):
+        """A track index the file lacks would make ffmpeg fail to map it."""
+        sm = StreamManager(test_prefs, streaming_format="hls")
+        fr = self._setup_resolver(mock_resolver_class, output_ext="m3u8")
+        fr.media = MediaInfo(
+            audio_tracks=[AudioTrack("Instrumental", "aac"), AudioTrack("", "aac")]
+        )
+
+        with patch.object(sm, "_transcode_file", return_value=(True, False)) as mock_transcode:
+            result = sm.play_file("/songs/test.mkv", audio_track=requested)
+
+        assert mock_transcode.call_args.args[3] == played
+        assert result.audio_track == played
+        assert result.audio_tracks == ["Instrumental", ""]
 
     @patch("flask_babel._", side_effect=lambda x: x)
     @patch("pikaraoke.lib.stream_manager.is_transcoding_required", return_value=True)

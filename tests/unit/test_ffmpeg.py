@@ -2,14 +2,17 @@
 
 from unittest.mock import MagicMock, patch
 
+import ffmpeg
 import pytest
 
 from pikaraoke.lib.ffmpeg import (
+    AudioTrack,
+    MediaInfo,
     build_ffmpeg_cmd,
     get_ffmpeg_version,
-    get_media_duration,
     is_ffmpeg_installed,
     is_transpose_enabled,
+    probe_media,
     supports_hardware_h264_encoding,
 )
 
@@ -146,36 +149,109 @@ class TestIsFfmpegInstalled:
             assert is_ffmpeg_installed() is False
 
 
-class TestGetMediaDuration:
-    """Tests for the get_media_duration function."""
+class TestProbeMedia:
+    """Tests for probe_media, which reads what playback needs before transcoding."""
+
+    def _probe(self, result):
+        with patch("pikaraoke.lib.ffmpeg.ffmpeg.probe", return_value=result):
+            return probe_media("/songs/song.mkv")
 
     def test_returns_exact_duration(self):
         """Duration is returned unrounded: the CDG -t trim needs sub-second precision."""
-        with patch("pikaraoke.lib.ffmpeg.ffmpeg.probe") as mock_probe:
-            mock_probe.return_value = {"format": {"duration": "183.456"}}
-            result = get_media_duration("/path/to/video.mp4")
-            assert result == 183.456
+        assert self._probe({"format": {"duration": "183.456"}}).duration == 183.456
 
-    def test_returns_none_on_probe_error(self):
-        """Test that None is returned when probe fails."""
-        with patch("pikaraoke.lib.ffmpeg.ffmpeg.probe") as mock_probe:
-            mock_probe.side_effect = Exception("Probe failed")
-            result = get_media_duration("/path/to/invalid.mp4")
-            assert result is None
+    def test_missing_duration_is_none(self):
+        assert self._probe({"format": {}}).duration is None
 
-    def test_returns_none_on_missing_duration(self):
-        """Test that None is returned when duration key is missing."""
-        with patch("pikaraoke.lib.ffmpeg.ffmpeg.probe") as mock_probe:
-            mock_probe.return_value = {"format": {}}
-            result = get_media_duration("/path/to/video.mp4")
-            assert result is None
+    def test_probe_error_returns_empty_info(self):
+        with patch(
+            "pikaraoke.lib.ffmpeg.ffmpeg.probe", side_effect=ffmpeg.Error("ffprobe", b"", b"")
+        ):
+            assert probe_media("/songs/broken.mkv") == MediaInfo()
 
-    def test_handles_integer_duration(self):
-        """Test handling of integer duration value."""
-        with patch("pikaraoke.lib.ffmpeg.ffmpeg.probe") as mock_probe:
-            mock_probe.return_value = {"format": {"duration": "120"}}
-            result = get_media_duration("/path/to/video.mp4")
-            assert result == 120
+    def test_lists_audio_tracks_named_by_title_then_language(self):
+        info = self._probe(
+            {
+                "format": {"duration": "200"},
+                "streams": [
+                    {"codec_type": "audio", "codec_name": "ac3", "tags": {"title": "Instrumental"}},
+                    {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
+                    {"codec_type": "audio", "codec_name": "aac"},
+                ],
+            }
+        )
+        assert info.audio_tracks == [
+            AudioTrack("Instrumental", "ac3"),
+            AudioTrack("eng", "aac"),
+            AudioTrack("", "aac"),
+        ]
+
+    def test_video_skips_attached_cover_art(self):
+        info = self._probe(
+            {
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "mjpeg",
+                        "disposition": {"attached_pic": 1},
+                    },
+                    {"codec_type": "video", "codec_name": "hevc", "pix_fmt": "yuv420p10le"},
+                ],
+            }
+        )
+        assert (info.video_codec, info.video_pix_fmt) == ("hevc", "yuv420p10le")
+
+
+class TestBuildFfmpegCmdVideoFile:
+    """Tests for how build_ffmpeg_cmd maps and encodes a video file's streams."""
+
+    def _fr(self, media, extension=".mkv"):
+        fr = MagicMock()
+        fr.file_path = f"/songs/song{extension}"
+        fr.file_extension = extension
+        fr.cdg_file_path = None
+        fr.cdg_stream = None
+        fr.media = media
+        fr.output_file = "/tmp/1.m3u8"
+        fr.init_filename = "1_init.mp4"
+        fr.segment_pattern = "/tmp/1_segment_%03d.m4s"
+        return fr
+
+    def _args(self, media, **kwargs):
+        with patch("pikaraoke.lib.ffmpeg.supports_hardware_h264_encoding", return_value=False):
+            return build_ffmpeg_cmd(self._fr(media), normalize_audio=False, **kwargs).get_args()
+
+    def _value(self, args, flag):
+        return args[args.index(flag) + 1]
+
+    def _two_tracks(self, video_codec="h264", pix_fmt="yuv420p", audio_codec="aac"):
+        tracks = [AudioTrack("Instrumental", audio_codec), AudioTrack("Vocals", audio_codec)]
+        return MediaInfo(video_codec=video_codec, video_pix_fmt=pix_fmt, audio_tracks=tracks)
+
+    def test_maps_only_the_chosen_audio_track(self):
+        """Mapping every track puts both into the stream, which the player cannot handle."""
+        args = self._args(self._two_tracks(), audio_track=1)
+        maps = [args[i + 1] for i, a in enumerate(args) if a == "-map"]
+        assert maps == ["0:a:1", "0:V:0"]
+
+    def test_copies_8bit_h264_from_any_container(self):
+        args = self._args(self._two_tracks())
+        assert self._value(args, "-vcodec") == "copy"
+        assert "-pix_fmt" not in args
+
+    def test_reencodes_10bit_video_to_8bit(self):
+        """10-bit sources would otherwise become High 10 H.264, which browsers cannot play."""
+        args = self._args(self._two_tracks(video_codec="hevc", pix_fmt="yuv420p10le"))
+        assert self._value(args, "-vcodec") == "libx264"
+        assert self._value(args, "-pix_fmt") == "yuv420p"
+
+    def test_mp4_mode_copies_browser_audio(self):
+        args = self._args(self._two_tracks(), force_mp4_encoding=True)
+        assert self._value(args, "-acodec") == "copy"
+
+    def test_mp4_mode_reencodes_ac3_audio(self):
+        args = self._args(self._two_tracks(audio_codec="ac3"), force_mp4_encoding=True)
+        assert self._value(args, "-acodec") == "aac"
 
 
 class TestIsTransposeEnabledIndexError:
